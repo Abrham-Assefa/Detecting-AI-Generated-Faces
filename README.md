@@ -26,19 +26,104 @@ Train/test split: 80% training, 20% testing.
 ## Models I compared
 
 ### 1. ViT-Small (Vision Transformer)
+
 Instead of scanning the image like a CNN, ViT splits the image into small patches and uses self-attention to compare every patch against every other. This makes it very good at catching the subtle, globally-distributed artifacts that AI-generated faces tend to have.
 
-**Result: 97.67% accuracy — best performing model.**
+```
+Input Image (224 × 224)
+        │
+        ▼
+  Split into 196 patches (each 16 × 16 pixels)
+        │
+        ▼
+  Linear embedding → 384-dim vector per patch
+  + learnable [CLS] token prepended
+        │
+        ▼
+  ┌─────────────────────────────────┐
+  │  Transformer Encoder × 12      │
+  │                                 │
+  │  Multi-Head Self-Attention      │
+  │  → every patch attends to       │
+  │    every other patch globally   │
+  │                                 │
+  │  + LayerNorm + MLP + Dropout    │
+  └─────────────────────────────────┘
+        │
+        ▼
+  [CLS] token → Dropout(0.1) → Linear → REAL / FAKE
+```
+
+**Result: 97.67% accuracy — best model.**
+
+---
 
 ### 2. ResNet-18
-A classic convolutional neural network with skip connections (residual blocks). Fast to train, lightweight, and a solid baseline. I chose ResNet-18 over the larger ResNet-50 because the bigger model overfits on this dataset size.
 
-### 3. FFT-ResNet (my custom model)
-This is the most experimental model. It runs two parallel streams:
-- **Spatial stream** — a regular ResNet-18 looking at pixel information
-- **Frequency stream** — converts the image to its Fourier frequency spectrum first, then passes that through another ResNet-18
+A classic convolutional neural network. Fast to train, lightweight, and a solid baseline. I chose ResNet-18 over the larger ResNet-50 because the bigger model overfits on this dataset size.
 
-The idea is that GAN-generated images often leave invisible artifacts in the frequency domain (caused by their upsampling layers) that pixel-based models miss. The two streams are merged at the end for the final prediction.
+```
+Input (224 × 224 × 3)
+        │
+        ▼
+  Conv 7×7 → MaxPool
+        │
+        ▼
+  Layer 1: 2 residual blocks, 64 filters
+        │
+        ▼
+  Layer 2: 2 residual blocks, 128 filters
+        │
+        ▼
+  Layer 3: 2 residual blocks, 256 filters
+        │
+        ▼
+  Layer 4: 2 residual blocks, 512 filters
+        │
+        ▼
+  Global Average Pooling
+        │
+        ▼
+  Dropout(0.4) → Linear(512 → 2) → REAL / FAKE
+
+  Each residual block adds the input directly to the output:
+  out = F(x) + x   ← skip connection
+```
+
+**Result: 95.75% accuracy.**
+
+---
+
+### 3. FFT-ResNet — my custom dual-stream model
+
+This is the most experimental model. It runs two parallel streams and merges them. The idea is that GAN-generated images often leave invisible artifacts in the frequency domain that pixel-based models miss entirely.
+
+```
+Input Image
+    │
+    ├─────────────────────┬──────────────────────────────┐
+    │                     │                              │
+    ▼                     ▼                              │
+SPATIAL STREAM        FREQUENCY STREAM                  │
+                                                         │
+ResNet-18 on          1. Convert to grayscale            │
+pixel values          2. Apply 2D FFT                   │
+                      3. Shift zero-freq to center       │
+                      4. Take log of magnitude           │
+                      5. Normalize to [0, 1]             │
+                      6. Run through ResNet-18           │
+    │                     │                              │
+    ▼                     ▼                              │
+512-dim vector        512-dim vector                    │
+    │                     │                              │
+    └──────────┬───────────┘                             │
+               │ concatenate → 1024-dim                  │
+               ▼                                         │
+    Linear(1024→256) → BatchNorm → ReLU                 │
+    → Dropout(0.5) → Linear(256→2) → REAL / FAKE        │
+```
+
+**Result: 94.79% accuracy.**
 
 ---
 
@@ -63,13 +148,50 @@ All models were trained with:
 
 ---
 
-## Results summary
+## Results
 
-| Model | Test Accuracy | AUC |
-|-------|--------------|-----|
-| ViT-Small | **97.67%** | 0.996 |
-| ResNet-18 | ~89% | — |
-| FFT-ResNet | — | — |
+These are the actual numbers from the final evaluation on the test set (730 images never seen during training).
+
+| Model | Accuracy | AUC | Precision | Recall | F1 Score |
+|-------|----------|-----|-----------|--------|----------|
+| ViT-Small | **97.67%** | **0.9961** | **0.977** | **0.980** | **0.978** |
+| ResNet-18 | 95.75% | 0.9857 | 0.957 | 0.964 | 0.960 |
+| FFT-ResNet | 94.79% | 0.9765 | 0.966 | 0.936 | 0.951 |
+
+ViT-Small is the clear winner across every metric. ResNet-18 is only 2% behind but trained for 60 epochs vs ViT's 20, meaning ViT is also more efficient. FFT-ResNet is competitive and the most novel approach, even though it ranks third here.
+
+### Per-class breakdown (ViT-Small)
+
+```
+              precision    recall    f1-score    support
+
+        FAKE       0.98      0.97      0.97        340
+        REAL       0.98      0.98      0.98        390
+
+    accuracy                           0.98        730
+```
+
+### Per-class breakdown (ResNet-18)
+
+```
+              precision    recall    f1-score    support
+
+        FAKE       0.96      0.95      0.95        340
+        REAL       0.96      0.96      0.96        390
+
+    accuracy                           0.96        730
+```
+
+### Per-class breakdown (FFT-ResNet)
+
+```
+              precision    recall    f1-score    support
+
+        FAKE       0.93      0.96      0.95        340
+        REAL       0.97      0.94      0.95        390
+
+    accuracy                           0.95        730
+```
 
 ---
 
