@@ -1,4 +1,4 @@
-# Detecting AI-Generated Faces
+# Detecting AI Generated Faces
 
 A deep learning project that classifies whether a face image is real or AI-generated.
 
